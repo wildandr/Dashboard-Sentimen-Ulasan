@@ -4,15 +4,72 @@ import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 import os
 import seaborn as sns
+import nltk
+import re
+import string
+import pandas as pd
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
+
+# Load your slang words DataFrame
+df_slang = pd.read_csv('/workspaces/Dashboard-Sentimen-Ulasan/colloquial-indonesian-lexicon.csv')
+
+def preprocess_reviews(data):
+    # Remove numbers
+    data['cleaned_ulasan'] = data['ulasan'].str.replace(r'[\d+]', ' ', regex=True)
+
+    # Remove punctuation
+    data['cleaned_ulasan'] = data['cleaned_ulasan'].apply(lambda x: x.translate(str.maketrans('', '', string.punctuation)))
+
+    # Remove extra whitespaces
+    data['cleaned_ulasan'] = data['cleaned_ulasan'].str.strip().replace(r'\s\s+', ' ', regex=True)
+
+    # Convert to lowercase and remove emojis
+    emoji_pattern = re.compile("["
+                               u"\U0001F600-\U0001F64F"
+                               u"\U0001F300-\U0001F5FF"
+                               u"\U0001F680-\U0001F6FF"
+                               u"\U0001F1E0-\U0001F1FF"
+                               u"\U00002500-\U00002BEF"
+                               u"\U00002702-\U000027B0"
+                               u"\U000024C2-\U0001F251"
+                               "]+", flags=re.UNICODE)
+    data['cleaned_ulasan'] = data['cleaned_ulasan'].str.lower().replace(emoji_pattern, ' ', regex=True)
+
+    # Replace slang words
+    def replace_slang(phrase):
+        return ' '.join([df_slang.loc[df_slang['slang'] == word, 'formal'].iloc[0] if word in df_slang['slang'].values else word for word in phrase.split()])
+
+    data['cleaned_ulasan'] = data['cleaned_ulasan'].apply(replace_slang)
+
+    # Tokenization
+    nltk.download('punkt')
+    data['cleaned_ulasan'] = data['cleaned_ulasan'].apply(word_tokenize)
+
+    # Remove stopwords
+    nltk.download('stopwords')
+    indonesian_stopwords = set(stopwords.words('indonesian'))
+    data['cleaned_ulasan'] = data['cleaned_ulasan'].apply(lambda x: [word for word in x if word not in indonesian_stopwords])
+
+    # Stemming
+    factory = StemmerFactory()
+    stemmer = factory.create_stemmer()
+    data['cleaned_ulasan'] = data['cleaned_ulasan'].apply(lambda x: [stemmer.stem(word) for word in x])
+
+    # Rejoin words
+    data['cleaned_ulasan'] = data['cleaned_ulasan'].apply(lambda x: ' '.join(x))
+
+    return data
 
 # Fungsi untuk visualisasi sebaran sentimen terhadap setiap aspek
 def plot_sentiment_by_aspect(data):
-    plt.figure(figsize=(10, 6))
-    sns.countplot(x='kategori aspek', hue='label', data=data)
-    plt.title('Sentiment Distribution by Aspect')
-    plt.xlabel('Aspect')
-    plt.ylabel('Number of Reviews')
-    return plt
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.countplot(x='kategori aspek', hue='label', data=data, ax=ax)
+    ax.set_title('Sentiment Distribution by Aspect')
+    ax.set_xlabel('Aspect')
+    ax.set_ylabel('Number of Reviews')
+    return fig
 
 # Fungsi untuk menghitung informasi tambahan
 def calculate_additional_info(data):
@@ -23,10 +80,22 @@ def calculate_additional_info(data):
     most_common_sentiment_count = data['label'].value_counts().max()
     return total_reviews, most_common_aspect, most_common_aspect_count, most_common_sentiment, most_common_sentiment_count
 
-# Fungsi untuk membuat wordcloud
 def create_wordcloud(data, aspect, sentiment):
-    text = " ".join(review for review in data[data["kategori aspek"] == aspect][data["label"] == sentiment]["ulasan"])
-    wordcloud = WordCloud(background_color="white").generate(text)
+    # Pastikan DataFrame difilter dengan benar
+    filtered_data = data[(data["kategori aspek"].str.lower() == aspect.lower()) & 
+                         (data["label"].str.lower() == sentiment.lower())]
+    
+    # Gabungkan semua ulasan menjadi satu string
+    text = " ".join(review.strip() for review in filtered_data["ulasan"])
+
+    # Jika tidak ada teks, buat wordcloud kosong
+    wordcloud = WordCloud(background_color="white", width=800, height=400)
+    if text:
+        wordcloud.generate(text)
+    else:
+        # Buat wordcloud kosong dengan teks default seperti "Tidak ada data"
+        wordcloud.generate("Tidak ada data")
+    
     return wordcloud
 
 # Fungsi untuk menampilkan pie chart
@@ -51,7 +120,7 @@ def login_user(username, password):
 
 # Fungsi utama Streamlit
 def main():
-    st.set_page_config(page_title="Dashboard Sentimen Ulasan Pengunjung Pariwisata Banyuwangi")
+    st.set_page_config(page_title="Dashboard Sentimen Ulasan Pengunjung Pariwisata Banyuwangi", layout='wide')
     st.image("Logo.png", width=100)
     st.title("Dashboard Sentimen Ulasan Pengunjung Pariwisata Banyuwangi")
 
@@ -81,11 +150,15 @@ def main():
                 try:
                     # Membaca file Excel
                     data = pd.read_excel(uploaded_file)
-                    st.write(data)
-                    st.session_state['data'] = data
-                    st.success("File Uploaded Successfully")
+
+                    # Apply preprocessing
+                    preprocessed_data = preprocess_reviews(data)
+
+                    st.write(preprocessed_data)  # Display the preprocessed data
+                    st.session_state['data'] = preprocessed_data  # Store the preprocessed data in session
+                    st.success("File Uploaded and Preprocessed Successfully")
                 except Exception as e:
-                    st.error(f"Error reading file: {e}")
+                    st.error(f"Error reading or preprocessing file: {e}")
 
         # Analysis
         elif menu == "Analysis":
@@ -101,7 +174,8 @@ def main():
 
                 with col1:
                     st.subheader("Sentiment Distribution")
-                    st.pyplot(plot_pie_chart(data))
+                    fig_pie_chart = plot_pie_chart(data)
+                    st.pyplot(fig_pie_chart)
 
                 with col2:
                     st.subheader("Total Reviews")
@@ -113,49 +187,37 @@ def main():
 
                 with col3:
                     st.subheader("Aspect Distribution")
-                    st.pyplot(plot_histogram(data))
+                    fig_histogram = plot_histogram(data)
+                    st.pyplot(fig_histogram)
 
-                # Box sebaran sentimen terhadap setiap aspek
                 st.subheader("Sentiment Distribution by Aspect")
-                sentiment_by_aspect_plot = plot_sentiment_by_aspect(data)
-                st.pyplot(sentiment_by_aspect_plot)
-
+                fig_sentiment_by_aspect = plot_sentiment_by_aspect(data)
+                st.pyplot(fig_sentiment_by_aspect)
 
             else:
                 st.warning("No data available. Please upload a file.")
 
-            # Wordcloud
+        # Opsi menu "Wordcloud"
         elif menu == "Wordcloud":
             st.header("Wordcloud")
-            sentiment = st.sidebar.selectbox("Select Sentiment", ["Positive", "Negative", "Neutral"])
+            sentiment = st.sidebar.selectbox("Pilih Sentimen", ["Positif", "Negatif", "Netral"])
 
-            if 'data' in st.session_state:
+            if 'data' in st.session_state and not st.session_state['data'].empty:
                 data = st.session_state['data']
                 col1, col2, col3 = st.columns(3)
 
-                with col1:
-                    st.subheader("Attraction")
-                    wc_attraction = create_wordcloud(data, "atraksi", sentiment.lower())
-                    plt.imshow(wc_attraction, interpolation='bilinear')
-                    plt.axis("off")
-                    st.pyplot()
-
-                with col2:
-                    st.subheader("Amenities")
-                    wc_amenities = create_wordcloud(data, "amenitas", sentiment.lower())
-                    plt.imshow(wc_amenities, interpolation='bilinear')
-                    plt.axis("off")
-                    st.pyplot()
-
-                with col3:
-                    st.subheader("Accessibility")
-                    wc_accessibility = create_wordcloud(data, "aksebilitas", sentiment.lower())
-                    plt.imshow(wc_accessibility, interpolation='bilinear')
-                    plt.axis("off")
-                    st.pyplot()
-
-            else:
-                st.warning("No data available. Please upload a file.")
+                aspects = ['atraksi', 'amenitas', 'aksesibilitas']
+                for i, aspect in enumerate(aspects):
+                    with (col1, col2, col3)[i]:
+                        st.subheader(f"{aspect.capitalize()}")
+                        wordcloud = create_wordcloud(data, aspect, sentiment.lower())
+                        if wordcloud:
+                            fig, ax = plt.subplots()
+                            ax.imshow(wordcloud, interpolation='bilinear')
+                            ax.axis("off")
+                            st.pyplot(fig)  # Sekarang meneruskan objek fig ke st.pyplot()
+                        else:
+                            st.error(f"Tidak ada cukup teks untuk aspek '{aspect}' dengan sentimen '{sentiment}'.")
 
 # Jalankan aplikasi
 if __name__ == "__main__":

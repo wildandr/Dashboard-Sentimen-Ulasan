@@ -5,8 +5,6 @@ from PIL import Image
 import csv
 import hashlib
 from textblob import TextBlob
-import pandas as pd
-import os
 
 # Setup awal Streamlit dan fungsi utility
 st.set_page_config(page_title="Dashboard Sentimen Ulasan Pengunjung Pariwisata Banyuwangi", layout="wide")
@@ -39,22 +37,35 @@ def login_page():
         st.session_state['logged_in'] = True
         st.success("Login Berhasil!")
 
-# Halaman Upload File
+# Halaman Upload File yang diperbarui
 def upload_page():
     display_header()
     st.subheader("Upload Data")
-    uploaded_file = st.file_uploader("Pilih Data", type=['csv', 'xlsx'])
-    if uploaded_file is not None:
-        # Simpan file yang diunggah ke tempat penyimpanan sementara
-        file_path = os.path.join("temp_uploaded", uploaded_file.name)
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        st.success("File berhasil diunggah.")
-    if st.button("Clear Data"):
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            st.success("Data berhasil dihapus.")
 
+    # Tentukan lokasi file default
+    default_file_path = '/workspaces/Dashboard-Sentimen-Ulasan/data.xlsx'
+
+    # Cek apakah file default ada
+    if os.path.exists(default_file_path):
+        st.info("Menggunakan data default. Silakan upload file baru untuk menggantinya.")
+        default_data = pd.read_excel(default_file_path)
+        st.write(default_data)
+    else:
+        st.warning("File data default tidak ditemukan. Silakan upload data baru.")
+
+    uploaded_file = st.file_uploader("Pilih Data", type=['xlsx'])
+    if uploaded_file is not None:
+        # Proses file yang diunggah
+        file_path = save_uploaded_file(uploaded_file)
+        if file_path:
+            data = process_data(file_path)
+            if data is not None:
+                st.write(data)
+                # Simpan data ke session state untuk digunakan di halaman lain
+                st.session_state['data'] = data
+    elif 'data' not in st.session_state:
+        # Jika tidak ada data yang diunggah, gunakan data default
+        st.session_state['data'] = default_data
 
 
 # Fungsi untuk melakukan analisis sentimen
@@ -125,7 +136,7 @@ def wordcloud_page():
     sentiment = st.selectbox("Pilih Sentimen", ["Positif", "Negatif", "Netral"])
     st.info(f"Wordcloud untuk sentimen {sentiment} (implementasi wordcloud)")
 
-# Main
+# Main function yang diperbarui
 def main():
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
